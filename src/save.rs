@@ -7,7 +7,7 @@ use bevy_ecs::entity::EntityHashSet;
 use bevy_ecs::prelude::*;
 use bevy_ecs::query::QueryFilter;
 use bevy_log::prelude::*;
-use bevy_scene::{DynamicScene, DynamicSceneBuilder, SceneFilter};
+use bevy_world_serialization::{DynamicWorld, DynamicWorldBuilder, WorldFilter};
 
 use moonshine_util::event::{OnSingle, SingleEvent, TriggerSingle};
 use moonshine_util::Static;
@@ -63,14 +63,14 @@ pub trait SaveEvent: SingleEvent {
     /// This is useful to undo any modifications done before saving.
     fn before_serialize(&mut self, _world: &mut World, _entities: &[Entity]) {}
 
-    /// Returns a [`SceneFilter`] for selecting which components should be saved.
-    fn component_filter(&mut self) -> SceneFilter {
-        SceneFilter::allow_all()
+    /// Returns a [`WorldFilter`] for selecting which components should be saved.
+    fn component_filter(&mut self) -> WorldFilter {
+        WorldFilter::allow_all()
     }
 
-    /// Returns a [`SceneFilter`] for selecting which resources should be saved.
-    fn resource_filter(&mut self) -> SceneFilter {
-        SceneFilter::deny_all()
+    /// Returns a [`WorldFilter`] for selecting which resources should be saved.
+    fn resource_filter(&mut self) -> WorldFilter {
+        WorldFilter::deny_all()
     }
 
     /// Called once after serialization.
@@ -91,11 +91,11 @@ pub struct SaveWorld<F: QueryFilter = DefaultSaveFilter> {
     /// A filter for selecting which resources should be saved.
     ///
     /// By default, no resources are selected. Most Bevy resources are not safely serializable.
-    pub resources: SceneFilter,
+    pub resources: WorldFilter,
     /// A filter for selecting which components should be saved.
     ///
     /// By default, all serializable components are selected.
-    pub components: SceneFilter,
+    pub components: WorldFilter,
     /// A mapper for transforming components during the save process.
     ///
     /// See [`MapComponent`] for more information.
@@ -111,8 +111,8 @@ impl<F: QueryFilter> SaveWorld<F> {
     pub fn new(output: SaveOutput) -> Self {
         Self {
             entities: EntityFilter::allow_all(),
-            resources: SceneFilter::deny_all(),
-            components: SceneFilter::allow_all(),
+            resources: WorldFilter::deny_all(),
+            components: WorldFilter::allow_all(),
             mapper: SceneMapper::default(),
             output,
             filter: PhantomData,
@@ -124,8 +124,8 @@ impl<F: QueryFilter> SaveWorld<F> {
     pub fn into_file(path: impl Into<PathBuf>) -> Self {
         Self {
             entities: EntityFilter::allow_all(),
-            resources: SceneFilter::deny_all(),
-            components: SceneFilter::allow_all(),
+            resources: WorldFilter::deny_all(),
+            components: WorldFilter::allow_all(),
             mapper: SceneMapper::default(),
             output: SaveOutput::file(path),
             filter: PhantomData,
@@ -137,8 +137,8 @@ impl<F: QueryFilter> SaveWorld<F> {
     pub fn into_stream(stream: impl SaveStream) -> Self {
         Self {
             entities: EntityFilter::allow_all(),
-            resources: SceneFilter::deny_all(),
-            components: SceneFilter::allow_all(),
+            resources: WorldFilter::deny_all(),
+            components: WorldFilter::allow_all(),
             mapper: SceneMapper::default(),
             output: SaveOutput::stream(stream),
             filter: PhantomData,
@@ -233,12 +233,12 @@ where
         }
     }
 
-    fn component_filter(&mut self) -> SceneFilter {
-        std::mem::replace(&mut self.components, SceneFilter::Unset)
+    fn component_filter(&mut self) -> WorldFilter {
+        std::mem::replace(&mut self.components, WorldFilter::Unset)
     }
 
-    fn resource_filter(&mut self) -> SceneFilter {
-        std::mem::replace(&mut self.resources, SceneFilter::Unset)
+    fn resource_filter(&mut self) -> WorldFilter {
+        std::mem::replace(&mut self.resources, WorldFilter::Unset)
     }
 
     fn output(&mut self) -> SaveOutput {
@@ -329,17 +329,17 @@ impl<S: Write> SaveStream for S where S: Static {}
 
 /// An [`Event`] triggered at the end of the save process.
 ///
-/// This event contains the saved [`World`] data as a [`DynamicScene`].
+/// This event contains the saved [`World`] data as a [`DynamicWorld`].
 #[derive(Event)]
 pub struct Saved {
-    /// The saved [`DynamicScene`] to be serialized.
-    pub scene: DynamicScene,
+    /// The saved [`DynamicWorld`] to be serialized.
+    pub world: DynamicWorld,
 }
 
 impl Saved {
     /// Iterates over all the saved entities.
     pub fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.scene.entities.iter().map(|de| de.entity)
+        self.world.entities.iter().map(|de| de.entity)
     }
 }
 
@@ -398,12 +398,15 @@ fn save_world<E: SaveEvent>(mut event: E, world: &mut World) -> SaveResult {
 
     // Serialize
     event.before_serialize(world, &entities);
-    let scene = DynamicSceneBuilder::from_world(world)
-        .with_component_filter(event.component_filter())
-        .with_resource_filter(event.resource_filter())
-        .extract_resources()
-        .extract_entities(entities.iter().copied())
-        .build();
+    let saved_world = {
+        let type_registry = world.resource::<AppTypeRegistry>().read();
+        DynamicWorldBuilder::from_world(world, &type_registry)
+            .with_component_filter(event.component_filter())
+            .with_resource_filter(event.resource_filter())
+            .extract_resources()
+            .extract_entities(entities.iter().copied())
+            .build()
+    };
 
     // Write
     let saved = match event.output() {
@@ -413,21 +416,21 @@ fn save_world<E: SaveEvent>(mut event: E, world: &mut World) -> SaveResult {
             }
 
             let type_registry = world.resource::<AppTypeRegistry>().read();
-            let data = scene.serialize(&type_registry)?;
+            let data = saved_world.serialize(&type_registry)?;
             std::fs::write(&path, data.as_bytes())?;
             debug!("saved into file: {path:?}");
-            Saved { scene }
+            Saved { world: saved_world }
         }
         SaveOutput::Stream(mut stream) => {
             let type_registry = world.resource::<AppTypeRegistry>().read();
-            let data = scene.serialize(&type_registry)?;
+            let data = saved_world.serialize(&type_registry)?;
             stream.write_all(data.as_bytes())?;
             debug!("saved into stream");
-            Saved { scene }
+            Saved { world: saved_world }
         }
         SaveOutput::Drop => {
             debug!("saved data dropped");
-            Saved { scene }
+            Saved { world: saved_world }
         }
         SaveOutput::Invalid => {
             panic!("SaveOutput is invalid");
@@ -441,9 +444,11 @@ fn save_world<E: SaveEvent>(mut event: E, world: &mut World) -> SaveResult {
 
 // TODO: Documentation
 #[doc(hidden)]
-pub struct SaveCommand<E>(E);
+pub struct SaveCommand<E>(pub E);
 
-impl<E: SaveEvent> Command<Result<(), SaveError>> for SaveCommand<E> {
+impl<E: SaveEvent> Command for SaveCommand<E> {
+    type Out = Result<(), SaveError>;
+
     fn apply(self, world: &mut World) -> Result<(), SaveError> {
         let saved = save_world(self.0, world)?;
         world.trigger(saved);

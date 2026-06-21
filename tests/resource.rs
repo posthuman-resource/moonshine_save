@@ -12,7 +12,8 @@ struct Foo;
 
 fn app() -> App {
     let mut app = App::new();
-    app.register_type::<Foo>().add_plugins(MinimalPlugins);
+    app.register_type::<Foo>()
+        .add_plugins((MinimalPlugins, AssetPlugin::default()));
     app
 }
 

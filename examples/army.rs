@@ -138,7 +138,7 @@ fn setup(mut commands: Commands) {
                 },
                 Text::new(HELP_TEXT),
                 TextFont {
-                    font_size: 14.0,
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -151,7 +151,7 @@ fn setup(mut commands: Commands) {
                 },
                 Text::new(""),
                 TextFont {
-                    font_size: 30.0,
+                    font_size: FontSize::Px(30.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -190,7 +190,7 @@ fn button(value: impl Into<String>, bundle: impl Bundle) -> impl Bundle {
             Node { ..default() },
             Text::new(value.into()),
             TextFont {
-                font_size: 20.,
+                font_size: FontSize::Px(20.),
                 ..default()
             },
             TextColor(Color::WHITE),

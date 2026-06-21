@@ -8,7 +8,7 @@ const SAVE_PATH: &str = "test_unsaved.ron";
 
 fn app() -> App {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
     app
 }
 

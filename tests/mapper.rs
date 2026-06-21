@@ -51,7 +51,7 @@ fn app() -> App {
     let mut app = App::new();
     app.register_type::<Bar>()
         .register_type::<SerializedFoo>()
-        .add_plugins(MinimalPlugins);
+        .add_plugins((MinimalPlugins, AssetPlugin::default()));
     app
 }
 

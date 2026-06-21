@@ -44,7 +44,7 @@ fn app() -> App {
     app.register_type::<Foo>()
         .register_type::<FooBar>()
         .register_type::<Bar>()
-        .add_plugins(MinimalPlugins);
+        .add_plugins((MinimalPlugins, AssetPlugin::default()));
     app
 }
 

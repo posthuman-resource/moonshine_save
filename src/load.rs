@@ -2,8 +2,9 @@ use std::io::{self, Read};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-use bevy_scene::DynamicScene;
-use moonshine_util::expect::{expect_deferred, ExpectDeferred};
+use bevy_asset::AssetServer;
+use bevy_world_serialization::DynamicWorld;
+use moonshine_util::expect::{expect_deferred, ExpectDeferredWorld};
 use moonshine_util::Static;
 use serde::de::DeserializeSeed;
 
@@ -11,7 +12,7 @@ use bevy_ecs::entity::EntityHashMap;
 use bevy_ecs::prelude::*;
 use bevy_ecs::query::QueryFilter;
 use bevy_log::prelude::*;
-use bevy_scene::{serde::SceneDeserializer, SceneSpawnError};
+use bevy_world_serialization::{serde::WorldDeserializer, WorldInstanceSpawnError};
 
 use moonshine_util::event::{OnSingle, SingleEvent, TriggerSingle};
 use thiserror::Error;
@@ -140,7 +141,7 @@ impl<U: QueryFilter> LoadWorld<U> {
     /// [`QueryFilter`] before the file at given path.
     pub fn from_file(path: impl Into<PathBuf>) -> Self {
         LoadWorld {
-            input: LoadInput::File(path.into()),
+            input: LoadInput::file(path),
             mapper: SceneMapper::default(),
             unload: PhantomData,
         }
@@ -150,7 +151,7 @@ impl<U: QueryFilter> LoadWorld<U> {
     /// [`QueryFilter`] before loading from the given [`Read`] stream.
     pub fn from_stream(stream: impl LoadStream) -> Self {
         LoadWorld {
-            input: LoadInput::Stream(Box::new(stream)),
+            input: LoadInput::stream(stream),
             mapper: SceneMapper::default(),
             unload: PhantomData,
         }
@@ -192,7 +193,7 @@ where
     }
 
     fn before_load(&mut self, world: &mut World) {
-        world.insert_resource(ExpectDeferred);
+        world.insert_resource(ExpectDeferredWorld);
     }
 
     fn after_load(&mut self, world: &mut World, result: &LoadResult) {
@@ -216,10 +217,13 @@ pub enum LoadInput {
     File(PathBuf),
     /// Load from a [`Read`] stream.
     Stream(Box<dyn LoadStream>),
-    /// Load from a [`DynamicScene`].
+    /// Load from a [`DynamicWorld`].
     ///
     /// This is useful if you would like to deserialize the scene manually from any data source.
-    Scene(DynamicScene),
+    World(DynamicWorld),
+    #[deprecated(note = "use `LoadInput::World` instead")]
+    /// Deprecated — use [`LoadInput::World`] instead.
+    Scene(DynamicWorld),
     #[doc(hidden)]
     Invalid,
 }
@@ -288,7 +292,7 @@ pub enum LoadError {
     Ron(ron::Error),
     /// Indicates a failure to reconstruct the world from the loaded data.
     #[error("Failed to spawn scene: {0}")]
-    Scene(SceneSpawnError),
+    Scene(WorldInstanceSpawnError),
 }
 
 impl From<io::Error> for LoadError {
@@ -309,8 +313,8 @@ impl From<ron::Error> for LoadError {
     }
 }
 
-impl From<SceneSpawnError> for LoadError {
-    fn from(e: SceneSpawnError) -> Self {
+impl From<WorldInstanceSpawnError> for LoadError {
+    fn from(e: WorldInstanceSpawnError) -> Self {
         Self::Scene(e)
     }
 }
@@ -334,23 +338,33 @@ fn load_world<E: LoadEvent>(mut event: E, world: &mut World) -> LoadResult {
     // Notify
     event.before_load(world);
 
+    let mut asset_server = world.resource::<AssetServer>().clone();
+
     // Deserialize
-    let scene = match event.input() {
+    let loaded_world = match event.input() {
         LoadInput::File(path) => {
             let bytes = std::fs::read(&path)?;
             let mut deserializer = ron::Deserializer::from_bytes(&bytes)?;
             let type_registry = &world.resource::<AppTypeRegistry>().read();
-            let scene_deserializer = SceneDeserializer { type_registry };
-            scene_deserializer.deserialize(&mut deserializer).unwrap()
+            let world_deserializer = WorldDeserializer {
+                type_registry,
+                load_from_path: &mut asset_server,
+            };
+            world_deserializer.deserialize(&mut deserializer)?
         }
-        LoadInput::Stream(mut stream) => {
+        LoadInput::Stream(mut data) => {
             let mut bytes = Vec::new();
-            stream.read_to_end(&mut bytes)?;
+            data.read_to_end(&mut bytes)?;
             let mut deserializer = ron::Deserializer::from_bytes(&bytes)?;
             let type_registry = &world.resource::<AppTypeRegistry>().read();
-            let scene_deserializer = SceneDeserializer { type_registry };
-            scene_deserializer.deserialize(&mut deserializer)?
+            let world_deserializer = WorldDeserializer {
+                type_registry,
+                load_from_path: &mut asset_server,
+            };
+            world_deserializer.deserialize(&mut deserializer)?
         }
+        LoadInput::World(input_world) => input_world,
+        #[allow(deprecated)] // TODO: Remove
         LoadInput::Scene(scene) => scene,
         LoadInput::Invalid => {
             panic!("LoadInput is invalid");
@@ -371,7 +385,7 @@ fn load_world<E: LoadEvent>(mut event: E, world: &mut World) -> LoadResult {
 
     // Load
     let mut entity_map = EntityHashMap::default();
-    scene.write_to_world(world, &mut entity_map)?;
+    loaded_world.write_to_world(world, &mut entity_map)?;
     debug!("loaded {} entities", entity_map.len());
 
     let result = Ok(Loaded { entity_map });
@@ -381,9 +395,11 @@ fn load_world<E: LoadEvent>(mut event: E, world: &mut World) -> LoadResult {
 
 // TODO: Documentation
 #[doc(hidden)]
-pub struct LoadCommand<E>(E);
+pub struct LoadCommand<E>(pub E);
 
-impl<E: LoadEvent> Command<Result<(), LoadError>> for LoadCommand<E> {
+impl<E: LoadEvent> Command for LoadCommand<E> {
+    type Out = Result<(), LoadError>;
+
     fn apply(self, world: &mut World) -> Result<(), LoadError> {
         let loaded = load_world(self.0, world)?;
         world.trigger(loaded);
@@ -418,7 +434,9 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).register_type::<Foo>();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .register_type::<Foo>();
         app
     }
 
