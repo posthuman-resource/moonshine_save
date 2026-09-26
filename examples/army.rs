@@ -1,4 +1,7 @@
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui::Pressed;
+use bevy::ui_widgets::Button;
 use bevy_ecs::entity::{EntityMapper, MapEntities};
 use moonshine_save::prelude::*;
 
@@ -184,6 +187,7 @@ fn button(value: impl Into<String>, bundle: impl Bundle) -> impl Bundle {
                 ..default()
             },
             Button,
+            Hovered::default(),
         ),
         BackgroundColor(bevy::color::palettes::css::DARK_GRAY.into()),
         children![(
@@ -238,57 +242,53 @@ const PRESSED_BUTTON_COLOR: Color = Color::srgb(0.35, 0.75, 0.35);
 
 /// Handle color feedback for buttons.
 fn update_buttons(
-    mut interaction_query: Query<(&Interaction, &mut BackgroundColor), Changed<Interaction>>,
+    mut button_query: Query<(&Hovered, Has<Pressed>, &mut BackgroundColor), With<Button>>,
 ) {
-    for (interaction, mut color) in &mut interaction_query {
-        match *interaction {
-            Interaction::Pressed => {
-                *color = PRESSED_BUTTON_COLOR.into();
-            }
-            Interaction::Hovered => {
-                *color = HOVERED_BUTTON_COLOR.into();
-            }
-            Interaction::None => {
-                *color = DEFAULT_BUTTON_COLOR.into();
-            }
-        }
+    for (hovered, pressed, mut color) in &mut button_query {
+        *color = if pressed {
+            PRESSED_BUTTON_COLOR.into()
+        } else if hovered.get() {
+            HOVERED_BUTTON_COLOR.into()
+        } else {
+            DEFAULT_BUTTON_COLOR.into()
+        };
     }
 }
 
 fn add_ranged_button_clicked(
-    query: Query<&Interaction, (With<AddRangedButton>, Changed<Interaction>)>,
+    query: Query<(), (With<AddRangedButton>, Added<Pressed>)>,
     mut commands: Commands,
 ) {
-    if let Ok(Interaction::Pressed) = query.single() {
+    if query.single().is_ok() {
         let weapon = commands.spawn(WeaponBundle::new(Ranged)).id();
         commands.spawn(SoldierBundle::new(weapon));
     }
 }
 
 fn add_melee_button_clicked(
-    query: Query<&Interaction, (With<AddMeleeButton>, Changed<Interaction>)>,
+    query: Query<(), (With<AddMeleeButton>, Added<Pressed>)>,
     mut commands: Commands,
 ) {
-    if let Ok(Interaction::Pressed) = query.single() {
+    if query.single().is_ok() {
         let weapon = commands.spawn(WeaponBundle::new(Melee)).id();
         commands.spawn(SoldierBundle::new(weapon));
     }
 }
 
 fn save_button_clicked(
-    query: Query<&Interaction, (With<SaveButton>, Changed<Interaction>)>,
+    query: Query<(), (With<SaveButton>, Added<Pressed>)>,
     mut commands: Commands,
 ) {
-    if let Ok(Interaction::Pressed) = query.single() {
+    if query.single().is_ok() {
         commands.trigger_save(SaveWorld::default_into_file(SAVE_PATH));
     }
 }
 
 fn load_button_clicked(
-    query: Query<&Interaction, (With<LoadButton>, Changed<Interaction>)>,
+    query: Query<(), (With<LoadButton>, Added<Pressed>)>,
     mut commands: Commands,
 ) {
-    if let Ok(Interaction::Pressed) = query.single() {
+    if query.single().is_ok() {
         commands.trigger_load(LoadWorld::default_from_file(SAVE_PATH));
     }
 }
