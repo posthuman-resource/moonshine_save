@@ -21,7 +21,7 @@ bevy_log = "0.20.0-rc.2"
 bevy_platform = "0.20.0-rc.2"
 bevy_reflect = "0.20.0-rc.2"
 bevy_world_serialization = "0.20.0-rc.2"
-moonshine-util = "0.5"
+moonshine-util = "0.6"
 
 [dev-dependencies]
 bevy = "0.20.0-rc.2"
